@@ -41,11 +41,9 @@ def create_sequences(aqi_values, target_indices, lookback=LOOKBACK):
 
         target = aqi_values[target_idx]
 
-        # Skip samples with missing historical AQI
         if not np.isfinite(sequence).all():
             continue
 
-        # Skip missing target AQI during training
         if not np.isfinite(target):
             continue
 
@@ -72,8 +70,11 @@ def train_and_predict_lstm(
     """
     Train an LSTM model for next-day AQI forecasting.
 
-    Uses chronological training and rolling one-day-ahead
-    predictions for the test period.
+    Returns:
+        model
+        scaler
+        predictions_df
+        metrics
     """
 
     tf.keras.utils.set_random_seed(random_state)
@@ -103,12 +104,9 @@ def train_and_predict_lstm(
 
     test_start = test_dates.min()
 
-    # Only observations before the test period
     training_mask = aqi_series.index < test_start
 
-    training_values = aqi_values[
-        training_mask
-    ]
+    training_values = aqi_values[training_mask]
 
     # Fit scaler only on training-period AQI
     scaler = MinMaxScaler()
@@ -133,9 +131,7 @@ def train_and_predict_lstm(
     ).flatten()
 
     # Find training target positions
-    train_indices = np.where(
-        training_mask
-    )[0]
+    train_indices = np.where(training_mask)[0]
 
     X_train, y_train, _ = create_sequences(
         scaled_values,
@@ -154,7 +150,6 @@ def train_and_predict_lstm(
     )[0]
 
     # Build test sequences using historical observations
-    # available before each individual prediction
     X_test = []
     test_actuals = []
     prediction_dates = []
@@ -196,10 +191,7 @@ def train_and_predict_lstm(
     model = Sequential([
         Input(shape=(lookback, 1)),
 
-        LSTM(
-            64,
-            return_sequences=True
-        ),
+        LSTM(64, return_sequences=True),
 
         Dropout(0.2),
 
@@ -283,21 +275,22 @@ def train_and_predict_lstm(
         "Evaluated_Records": len(evaluation_data)
     }
 
-    return model, predictions_df, metrics
+    return model, scaler, predictions_df, metrics
 
 
 def train_all_lstm(city_data, city_splits):
     """
-    Train independent LSTM models for all cities.
+    Train independent LSTM models and scalers for all cities.
     """
 
     trained_models = {}
+    trained_scalers = {}
     all_predictions = {}
     all_metrics = []
 
     for city, daily_data in city_data.items():
 
-        model, predictions, metrics = (
+        model, scaler, predictions, metrics = (
             train_and_predict_lstm(
                 city=city,
                 daily_data=daily_data,
@@ -306,6 +299,7 @@ def train_all_lstm(city_data, city_splits):
         )
 
         trained_models[city] = model
+        trained_scalers[city] = scaler
         all_predictions[city] = predictions
         all_metrics.append(metrics)
 
@@ -317,4 +311,10 @@ def train_all_lstm(city_data, city_splits):
 
     results_df = pd.DataFrame(all_metrics)
 
-    return trained_models, all_predictions, results_df
+    return (
+        trained_models,
+        trained_scalers,
+        all_predictions,
+        results_df
+    )
+
